@@ -11,8 +11,7 @@ to present at the Penn State mac admins conference in 2019. You can see that her
 DEPNotify works with several MDM's and allows you to "tail" the log files of these MDM's to report back what's installing. Please download the main application and extract
 the DEPNotify.app before creating your deployment package. latest build for 1.1.5 is in a package and can be found here: https://files.nomad.menu/DEPNotify.pkg
 
-You can use -jamf, -filewave, -munki. If you want to tail the AirWatch or WS1 log file, just point to it:
+You can use -jamf, -filewave, -munki. 
 
-ln -s /Library/Application\ Support/AirWatch/Data/Munki/Logs/ManagedSoftwareUpdate.log /Library/Managed\ Installs/Logs/ManagedSoftwareUpdate.log
-
-More info at http://www.aarondavidpolley.com/vmware-airwatch-munki-teardown/ credit @aarondavidpolley
+If you want to tail the AirWatch or WS1 log file, follow these instructions from VMware:
+https://github.com/vmware-samples/euc-samples/tree/master/macOS-Samples/BootstrapPackage/WS1-DEPNotify-Standard#customize-the-depnotify-settings (Thanks to Mathijs de Ruiter for the heads up!)
