@@ -1,0 +1,296 @@
+#!/bin/bash
+
+# CHOICE Install
+
+# Variables
+DEP_NOTIFY_APP="/Applications/Utilities/DEPNotify.app"
+DEP_NOTIFY_CONFIG="/var/tmp/depnotify.log"
+DEP_NOTIFY_DONE="/var/tmp/com.depnotify.provisioning.done"
+DEP_NOTIFY_REG="/var/tmp/com.depnotify.registration.done"
+TMP_DEBUG_LOG="/var/tmp/depNotifyDebug.log"
+WORD_INSTALL="/Applications/Microsoft Word.app"
+OUTLOOK_INSTALL="/Applications/Microsoft Outlook.app"
+DEP_CLIENT_INSTALL="/Applications/Intelligent Hub.app"
+SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+FINDER_PROCESS=$(pgrep -l "Finder")
+
+# The stuff AirWatch needs
+# AuthHeader uses Svc Acct
+AuthString='Basic PASSWORD'
+# TenantCode is Unique to MacOS
+TenantCodeString='STRING GOES HERE'
+# SerialNumber Of Device
+DeviceSerialNumber=$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}')
+# URI for apps
+RequestURIYourAppNumber1="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber1/install"
+RequestURIYourAppNumber2="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIYourAppNumber3="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIYourAppNumber4="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIYourAppNumber5="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIYourAppNumber6="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIYourAppNumber7="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+RequestURIOffice="https://000.awmdm.com/api/mam/apps/internal/YourAppNumber/install"
+
+# Wait for Setup Assistant to finish
+until [ "$SETUP_ASSISTANT_PROCESS" = "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Setup Assistant Still Running. PID $SETUP_ASSISTANT_PROCESS." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+done
+
+# Wait for Finder - Helps if user is not DEP enrolled and has to log in
+until [ "$FINDER_PROCESS" != "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Finder process not found. Assuming device is at login screen." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    FINDER_PROCESS=$(pgrep -l "Finder")
+done
+
+# Getting current logged in user
+loggedInUser=$( scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
+
+# Remove old configs if they exist
+if [ -f "$DEP_NOTIFY_CONFIG" ]; then
+    rm "$DEP_NOTIFY_CONFIG"
+fi
+if [ -f "$DEP_NOTIFY_REG" ]; then
+    rm "$DEP_NOTIFY_REG"
+fi
+
+# Check if finish file is installed. If so, then quit script.
+if [ -f "$DEP_NOTIFY_DONE" ]; then
+  /bin/rm -Rf $DEP_NOTIFY_CONFIG
+  /bin/rm -Rf $DEP_NOTIFY_APP
+  /bin/rm -Rf $DEP_NOTIFY_REG
+  /bin/rm -Rf /var/tmp/icons/
+  /bin/rm -Rf /Library/LaunchDaemons/com.aag.launchdep.plist
+  /bin/rm -Rf /var/tmp/depinstall
+  exit 0
+fi
+
+# Let's not go to sleep
+caffeinate -d -i -m -s -u &
+caffeinatepid=$!
+
+# Disable Software Updates during imaging and wait for user to be fully logged on
+softwareupdate --schedule off
+
+# Set a main image
+echo "Command: Image: /var/tmp/icons/aamain2.png" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainTitle: Welcome To Alaska Airlines!" >> $DEP_NOTIFY_CONFIG
+
+# Set the Body Text
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationButtonLabel "Continue"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationMainTitle ""
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationPicturePath "/var/tmp/icons/aamain.png"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1Placeholder "ex: seaxm"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1Label "Mail Code"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2Placeholder "ex: hshaw"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2Label "Username"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1Bubble -array 'What is a mail code?' 'You can find your five digit mail office code in the Outlook Global Address List or get the information from PeopleSoft.'
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2Bubble -array 'Which name do I use?' 'This spot is reserved for your username like v-jsmith or gwick. Do not use your email address.'
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify popupMenu1Bubble -array 'Which one do I pick?' 'If you are not a part of Field Services, then you should choose the option Self Install'
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify popupButton1Content -array 'Self Install' 'Field Services Team Member'
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify popupButton1Label "Who is performing this install?"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1IsOptional -bool 0
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2IsOptional -bool 0
+echo "Command: MainText: Thanks for choosing a Mac and being a little different :) We want you to have a few applications and settings configured before you get started. This process normally takes 30 minutes to complete depending on internet speed. \n \n You'll need your 5 letter mail code and SSO username to continue below. Hit the Register button to get started " >> /var/tmp/depnotify.log
+echo "Status:  " >> $DEP_NOTIFY_CONFIG
+echo "Command: ContinueButtonRegister: Register" >> $DEP_NOTIFY_CONFIG
+
+# Download the WS1 Agent if it doesn't exist
+if [ ! -e "$DEP_CLIENT_INSTALL" ]; then
+echo "Status: Installing Workspace One Intelligent Hub" >> $DEP_NOTIFY_CONFIG
+curl -L "https://storage.googleapis.com/getwsone-com-prod/downloads/VMwareWorkspaceONEIntelligentHub.pkg" -o /tmp/VMwareWorkspaceONEIntelligentHub.pkg
+installer -package /tmp/VMwareWorkspaceONEIntelligentHub.pkg -target /
+fi
+
+# Open DepNotify
+sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args -fullScreen
+
+# Wait for input file creation
+while [ ! -f "$DEP_NOTIFY_REG" ];
+   do
+    sleep 2
+   done
+ls -l $DEP_NOTIFY_REG
+
+# Let's read the user data into some variables and set the name removing -V, making it uppercase, and removing spaces
+mailCode=$(/usr/libexec/plistbuddy /Users/Shared/DEPNotify.plist -c "print 'MAIL CODE'" | cut -c 1-5)
+userName=$(/usr/libexec/plistbuddy /Users/Shared/DEPNotify.plist -c "print 'USERNAME'" | sed 's/@.*//' | sed 's/\..*//')
+macName="${mailCode}M${userName}"
+macName=$(echo -n "$macName" | sed 's/^ *//' | sed 's/ *$//' | sed 's/v-//g' | tr '[:lower:]' '[:upper:]')
+
+# Rename the mac and flush DNS
+sudo scutil --set ComputerName "${macName}"
+sudo scutil --set LocalHostName "${macName}"
+sudo scutil --set HostName "${macName}"
+dscacheutil -flushcache
+
+#Choice build either Tech or User install
+TechBuild=$(/usr/libexec/plistbuddy /Users/Shared/UserInput.plist -c "print 'Who is performing this install?'")
+
+if [ "$TechBuild" = "Self Install" ]; then
+  # Set things to determinate and teach a bit about how to run DEPNotify
+  echo "Command: Image: /var/tmp/icons/app.png" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: Checking Internet Connection" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainTitle: Getting Ready" >> $DEP_NOTIFY_CONFIG
+  sleep 5
+  # Check internet connection
+  if ping -q -c 1 -W 1 8.8.8.8 >/dev/null; then
+    echo "Command: MainText: Internet Connection is good!" >> "$DEP_NOTIFY_CONFIG"
+  else
+    echo "Status: Please check your internet connection" >> "$DEP_NOTIFY_CONFIG"
+    echo "Command: MainText: No Network Connection Found. If connected to AGGuest, make sure to make that default wireless and to connect automatically. Close this program by hitting command-control-x or waiting 30 seconds when it closes on it's own then check connection" >> "$DEP_NOTIFY_CONFIG"
+    sleep 30
+    echo "Command: Quit" >>  "$DEP_NOTIFY_CONFIG"
+  fi
+  echo "Command: MainTitle: Installing Applications" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: We are now going to install a few applications. If you notice that after the install you need additional software, please submit a ticket to the help desk ITS.Service.Desk@alaskaair.com" >> $DEP_NOTIFY_CONFIG
+  echo "Command: DeterminateManual: 10" >> $DEP_NOTIFY_CONFIG
+  echo "Status:  " >> $DEP_NOTIFY_CONFIG
+  sleep 20
+  # Install Apps
+  echo "Status: Downloading and installing apps" >> $DEP_NOTIFY_CONFIG
+  sleep 30
+  echo "Command: MainTitle: The Early Days" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: The company that we grew out of to become Alaska Airlines was born in 1932 when Linious 'Mac' McGee painted 'McGee Airways' on the side of a three-passenger Stinson and started flying out of Anchorage. Mine owner Wesley 'Earl' Dunkle loaned money to pilots Steve Mills, Charlie Ruttan, and Jack Waterworth to start Star Air Service. In 1934, McGee merged with Star Air Service, creating the largest airline in Alaska with 22 aircraft. Flying in those days wasn't scheduled. Flights typically took off once the plane was full, whether it was full of passengers, furs, or groceries." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag2.jpg" >> $DEP_NOTIFY_CONFIG
+  echo "Status: Downloading and installing apps" >> $DEP_NOTIFY_CONFIG
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber1
+  sleep 45
+  echo "Command: MainText: After those two airlines merged along with other mergers, where many more carriers were woven into the fabric of the company, the Star Air Service name was changed a couple of times—until 1944, when they found one that stuck: Alaska Airlines, the name we use today." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag4.jpg" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Status: " >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: By the late 1940s, using surplus military aircraft, Alaska Airlines had branched into worldwide charter work, including the Berlin Airlift in 1948 and Operation Magic Carpet, the airlift of thousands of Yemenite Jews to Israel in 1949." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag4b.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber2
+  echo "Command: MainText: Charlie Willis, a decorated World War II pilot came aboard as chairman and CEO in '57. A born marketer, he ushered in one of the most colorful eras of our company’s history, and brought in-flight movies to the nation's skies for the first time." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag5.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: in the 1960's, we became the first commercial carrier to fly the Lockheed Hercules, hauling drilling rigs to Alaska's oil-rich North Slope and later to the jungles of Ecuador. The Boeing 727, our company's signature aircraft for 25 years, joined the fleet in the mid-60s. We debuted in Southeast Alaska at Sitka in '67, and a year later merged with two long-time Southeast airlines, Alaska Coastal-Ellis and Cordova." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag6.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainTitle: The 1970's were a busy decade" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: Alaska was on the brink of collapse in 1972. A new team, led by Ron Cosgrave, took the helm at the boards urging. The financially-faltering ship was righted and pains were taken to improve customer service, particularly on-time performance. In '73 the company turned a profit and, for the first time in years, there appeared to be prospects for long-term stability. Bruce Kennedy, an integral part of Cosgrave’s team, became CEO in '79, the same year US skies were deregulated. At the time, our airline served 10 cities in Alaska and Seattle with only ten aircraft." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag7a.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Status: Downloading and installing apps" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: The Eskimo first appeared in 1972, when Alaska adopted a four-logo paint scheme – a totem pole, to represent the native culture of Southeast Alaska; a gold miner, to represent the booming gold rush days in Alaska; Russian spires, to represent early Russian heritage in the state of Alaska; and a native Alaskan adorned in a traditional qulittaq (parka with ruff) to represent the Arctic region and its people. Indigenous Alaskans in the Arctic, traditionally of Inupiat or Yupik descent, commonly refer to themselves as Eskimo." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag3.jpg" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Status: A handy phone number to remember is 1-877-238-1077 for the ITS Help Desk" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: These four liveries adorned Alaska’s jets from 1972 until 1976, when the company adopted the Eskimo tail fleet-wide, and updated the face to be less stern." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag7c.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: In '73 the company turned a profit and, for the first time in years, there appeared to be prospects for long-term stability. Bruce Kennedy, an integral part of Ron Cosgrave’s team, became CEO in '79, the same year US skies were deregulated. Alaska was one of only three carriers that pushed for deregulation, knowing significant growth would be impossible without it. At the time, our airline served 10 cities in Alaska and one in the lower 48 (Seattle)." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag7b.png" >> $DEP_NOTIFY_CONFIG
+  sleep 30
+  echo "Command: MainTitle: Just like the music, the 80's were awesome" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: We expanded in a measured, constant fashion throughout the 1980s. Following start of service to Portland and San Francisco in 1979, expansion over the next five years brought Alaska to Southern California, Oakland, San Jose, Spokane, Boise, Phoenix, and Tucson, and saw resumption of service to Nome and Kotzebue." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag8.png" >> $DEP_NOTIFY_CONFIG
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber3
+  sleep 45
+  echo "Status: We are making some progress!!" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: As revenues and profits soared, Alaska Air Group was formed in 1985 as a holding company for the airline. A year later, it acquired Horizon Air and Jet America Airlines. In a move bolstering our north-south route structure and complementing the seasonal nature of travel to Alaska, we launched service to Mexico in 1988." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag8a.jpeg" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: MainTitle: The airline for grunge rockers in the 90's" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: With the growing success of low-cost/low-fare carriers, the airline industry changed in fundamental ways in the ‘90s, streamlining its cost structure and increasing aircraft utilization. At Alaska Airlines, we reshaped ourselves faster and more comprehensively than any carrier—all while maintaining a competitive advantage in customer service. The new motto, 'For the same price, you just get more' resonated with customers." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag9.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: MainTitle: The 2000's and beyond!" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: The 2000's saw us stretch our wings across the Lower 48 to Boston, Chicago, Dallas, Denver, Miami, Newark, Orlando, and Washington D.C, and we also crossed the Pacific with much-heralded service to the Hawaiian Islands and added more destinations in Mexico. The transition to an expanded, all-Boeing 737 fleet means greater fuel savings, other efficiencies, and continued respect for the environment." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag00.png" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: In keeping with the priorities of this decade, we have refocused our efforts to carry on our legacy of technological innovation, customer-first thinking, and customer communication via social media. Technological achievements have punctuated our company's history and these past few years have been no exception. Since 2010 and the creation of our customer innovation department, we've launched mobile apps across all platforms, replaced our pilots' paperwork with iPads,  and spearheaded self bag-tagging." >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aag10.jpg" >> $DEP_NOTIFY_CONFIG
+  sleep 45
+  echo "Command: MainTitle: Welcome to the Alaska Team!" >> $DEP_NOTIFY_CONFIG
+  echo "Command: Image: /var/tmp/icons/aa.jpg" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: Whenever the history of commercial aviation is written, people will ask how an obscure little airline in America's hinterland continued to survive and thrive while once-proud giants disappeared. Grit and determination will be part of the answer. However, more than that, it's our people. Their caring, resourcefulness, integrity, professionalism, and spirit. The unique spirit of The Great Land where our airline was born." >> $DEP_NOTIFY_CONFIG
+  echo "Status: Installing Office which means we're almost done!" >> $DEP_NOTIFY_CONFIG
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIOffice
+  sleep 60
+  echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+  echo "Status: Office is almost 2GB so it's gonna be a few..." >> $DEP_NOTIFY_CONFIG
+else
+  # TechBuild
+  echo "Command: MainTitle: Tech Build" >> $DEP_NOTIFY_CONFIG
+  echo "Command: MainText: Checking Internet Connection" >> $DEP_NOTIFY_CONFIG
+  sleep 5
+  # Check internet connection
+  if ping -q -c 1 -W 1 8.8.8.8 >/dev/null; then
+    echo "Command: MainText: Internet Connection is good!" >> "$DEP_NOTIFY_CONFIG"
+    echo "Status: Standby for apps" >> $DEP_NOTIFY_CONFIG
+  else
+    echo "Status: Please check your internet connection" >> "$DEP_NOTIFY_CONFIG"
+    echo "Command: MainText: No Network Connection Found. If connected to AGGuest, make sure to make that default wireless and to connect automatically. Close this program by hitting command-control-x or waiting 30 seconds when it closes on it's own then check connection" >> "$DEP_NOTIFY_CONFIG"
+    sleep 30
+    echo "Command: Quit" >>  "$DEP_NOTIFY_CONFIG"
+  fi
+
+  # Install Apps
+  echo "Command: Determinate: 6" >> $DEP_NOTIFY_CONFIG
+  echo "Status: Installing Applications" >> "$DEP_NOTIFY_CONFIG"
+  sleep 5
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber1
+  sleep 10
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber2
+  sleep 5
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber3
+  sleep 30
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIOffice
+  echo "Status: Downloading Office" >> "$DEP_NOTIFY_CONFIG"
+  sleep 30
+fi
+
+# Wait for Outlook install
+while [ ! -e "$OUTLOOK_INSTALL" ];
+do
+  sleep 5
+done
+
+# Wait for Word install
+while [ ! -e "$WORD_INSTALL" ];
+do
+  sleep 5
+done
+
+# Install AV
+curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIYourAppNumber5
+# Create file to confirm DEPNotify completion
+/usr/bin/touch /var/tmp/com.depnotify.provisioning.done
+
+# Remove the Launch Daemon
+/bin/rm -Rf /Library/LaunchDaemons/com.aag.launchdep.plist
+
+# Encrypt
+echo "Command: MainTitle: Wrapping things up" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: The last step is to encrypt your mac. Once this Window closes in 20 seconds, you'll be asked to logoff and enter your password to start the encryption process" >> $DEP_NOTIFY_CONFIG
+echo "Status: Your Desktop will be available in a few seconds" >> $DEP_NOTIFY_CONFIG
+sleep 10
+
+# Wake back up
+kill "$caffeinatepid"
+
+# Quit
+echo "Command: Quit" >>  $DEP_NOTIFY_CONFIG
+
+# Remove DEPNotify and the logs
+/bin/rm -Rf $DEP_NOTIFY_CONFIG
+/bin/rm -Rf $DEP_NOTIFY_APP
+/bin/rm -Rf $DEP_NOTIFY_REG
+/bin/rm -Rf /var/tmp/icons/
+
+exit 0
