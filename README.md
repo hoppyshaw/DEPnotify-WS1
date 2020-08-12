@@ -18,3 +18,5 @@ You can use -jamf, -filewave, -munki.
 
 If you want to tail the AirWatch or WS1 log file, follow these instructions from VMware:
 https://github.com/vmware-samples/euc-samples/tree/master/macOS-Samples/BootstrapPackage/WS1-DEPNotify-Standard#customize-the-depnotify-settings (Thanks to Mathijs de Ruiter for the heads up!)
+
+Here is a video explaining the basics of DEPNotify and how it's used for our org. https://youtu.be/HbKZ66F58qo
