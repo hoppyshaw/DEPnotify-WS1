@@ -1,0 +1,298 @@
+#!/bin/bash
+
+# Staging Install
+
+# SITE is referenced multiple times in the script and should be changed to the code for your tenant in WS1 along with Auth and Tenant
+
+
+# Variables
+DEP_NOTIFY_APP="/Applications/Utilities/DEPNotify.app"
+DEP_NOTIFY_CONFIG="/var/tmp/depnotify.log"
+DEP_NOTIFY_DONE="/var/tmp/com.depnotify.provisioning.done"
+DEP_NOTIFY_REG="/var/tmp/com.depnotify.registration.done"
+TMP_DEBUG_LOG="/var/tmp/depNotifyDebug.log"
+Excel="/Applications/Microsoft Excel.app"
+PowerPoint="/Applications/Microsoft PowerPoint.app"
+Teams="/Applications/Microsoft Teams.app"
+PROGRAM3="/Applications/PROGRAM3.app"
+WORD_INSTALL="/Applications/Microsoft Word.app"
+PROGRAM1="/Applications/PROGRAM1.app"
+PROGRAM2="/Applications/PROGRAM2.app"
+OUTLOOK_INSTALL="/Applications/Microsoft Outlook.app"
+DEP_CLIENT_INSTALL="/Applications/Intelligent Hub.app"
+SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+FINDER_PROCESS=$(pgrep -l "Finder")
+JSONdevice="/var/tmp/data.json"
+JSONemail="/var/tmp/email.json"
+
+# URI for office which is the only app "pulled" from the console. 
+RequestURIOffice="https://SITE.awmdm.com/api/mam/apps/internal/000/install"
+
+
+# The stuff WS1 needs
+# AuthHeader uses Svc Acct
+AuthString='Basic STRING HERE'
+# TenantCode 
+TenantCodeString='STRING PW HERE'
+# SerialNumber Of Device
+DeviceSerialNumber=$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}')
+
+# Wait for Setup Assistant to finish
+until [ "$SETUP_ASSISTANT_PROCESS" = "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Setup Assistant Still Running. PID $SETUP_ASSISTANT_PROCESS." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+done
+
+# Wait for Finder - Helps if user is not DEP enrolled and has to log in
+until [ "$FINDER_PROCESS" != "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Finder process not found. Assuming device is at login screen." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    FINDER_PROCESS=$(pgrep -l "Finder")
+done
+
+# Getting current logged in user
+loggedInUser=$( scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}' )
+
+# Remove old configs if they exist
+if [ -f "$DEP_NOTIFY_CONFIG" ]; then
+    rm "$DEP_NOTIFY_CONFIG"
+fi
+if [ -f "$DEP_NOTIFY_REG" ]; then
+    rm "$DEP_NOTIFY_REG"
+fi
+
+# Check if finish file is installed. If so, then quit script.
+if [ -f "$DEP_NOTIFY_DONE" ]; then
+  /bin/rm -Rf $DEP_NOTIFY_CONFIG
+  /bin/rm -Rf $DEP_NOTIFY_APP
+  /bin/rm -Rf $DEP_NOTIFY_REG
+  /bin/rm -Rf /var/tmp/icons/
+  /bin/rm -Rf /Library/LaunchDaemons/com.aag.launchdep.plist
+  /bin/rm -Rf /var/tmp/depinstall
+  exit 0
+fi
+
+# Let's not go to sleep
+caffeinate -d -i -m -s -u &
+caffeinatepid=$!
+
+# Disable Software Updates during imaging and wait for user to be fully logged on
+softwareupdate --schedule off
+
+# Set a main image
+echo "Command: Image: /var/tmp/icons/aamain2.png" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainTitle: Welcome To Alaska Airlines macOS Build" >> $DEP_NOTIFY_CONFIG
+
+# Set the Body Text. Several other options here but just using what I need
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationButtonLabel "Start"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationMainTitle "Enrollment Information"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify registrationPicturePath "/var/tmp/icons/aamain.png"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1Placeholder "ex: USER1"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1Label "Name of Device"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2Placeholder ""
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2Label "Email Address"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField1IsOptional -bool 0
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify textField2IsOptional -bool 0
+echo "Command: MainText: Please make sure the user you are building this mac for has an active account in WS1. You'll fill out the email address and device name based on the user who is getting this device." >> $DEP_NOTIFY_CONFIG
+echo "Status:  Build Version 0520HS" >> $DEP_NOTIFY_CONFIG
+echo "Command: ContinueButtonRegister: Register" >> $DEP_NOTIFY_CONFIG
+
+# Download the WS1 Agent if it doesn't exist as I'm not installing it via the console automatically
+if [ ! -e "$DEP_CLIENT_INSTALL" ]; then
+curl -L "https://storage.googleapis.com/getwsone-com-prod/downloads/VMwareWorkspaceONEIntelligentHub.pkg" -o /tmp/VMwareWorkspaceONEIntelligentHub.pkg
+installer -package /tmp/VMwareWorkspaceONEIntelligentHub.pkg -target /
+fi
+
+sleep 10
+
+# Open DepNotify
+sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args -fullScreen
+
+# Wait for input file creation which is created after user hits Register
+while [ ! -f "$DEP_NOTIFY_REG" ];
+   do
+    sleep 2
+   done
+ls -l $DEP_NOTIFY_REG
+
+# Let's read the user data into some variables and set the name. Make this whatever your naming convention is
+DeviceName=$(/usr/libexec/plistbuddy /Users/Shared/UserInput.plist -c "print 'Name of Device'")
+userName=$(/usr/libexec/plistbuddy /Users/Shared/UserInput.plist -c "print 'Email Address'")
+macName=$(echo -n "$DeviceName" | sed 's/^ *//' | sed 's/ *$//' | sed 's/v-//g' | sed 's/^\(.\{5\}\)/\1M/' | cut -c 1-13 | tr '[:lower:]' '[:upper:]')
+
+sleep 5
+
+# Name the device based on earlier UserInput
+# Rename the mac
+sudo scutil --set ComputerName "${macName}"
+sudo scutil --set LocalHostName "${macName}"
+sudo scutil --set HostName "${macName}"
+
+
+# Check internet connection
+if ping -q -c 1 -W 1 8.8.8.8 >/dev/null; then
+ echo "Command: MainText: Internet Connection is good!" >> "$DEP_NOTIFY_CONFIG"
+else
+ echo "Status: Please check your internet connection" >> "$DEP_NOTIFY_CONFIG"
+ echo "Command: MainText: No Network Connection Found. If connected to AGGuest, make sure to make that default wireless and to connect automatically. Close this program by hitting command-control-x or waiting 30 seconds when it closes on it's own then check connection" >> "$DEP_NOTIFY_CONFIG"
+ sleep 30
+ echo "Command: Quit" >>  "$DEP_NOTIFY_CONFIG"
+fi
+echo "Command: MainTitle: Installing Applications" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: This should take around 15 minutes or less to finish depending on connection" >> $DEP_NOTIFY_CONFIG
+echo "Command: DeterminateManual: 21" >> $DEP_NOTIFY_CONFIG
+sleep 10
+
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# I can't control the order here so I'm basically just informing the enduser of the three programs that are installing. # might finish or start before 1 but it's ok. Just informational
+# Wait for PROGRAM1 install
+while [ ! -e "$PROGRAM1" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: PROGRAM1 Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for PROGRAM2 install
+while [ ! -e "$PROGRAM2" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: PROGRAM2 Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for PROGRAM3 install
+while [ ! -e "$PROGRAM3" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: PROGRAM3 Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Since I'm manually kicking off Office install, I can better control that process of informing the bench
+curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url $RequestURIOffice
+echo "Command: MainText: Downloading Office now which takes up the majority of the build time. This message will update once each part of office is installed." >> "$DEP_NOTIFY_CONFIG"
+
+# Wait for Teams install
+while [ ! -e "$Teams" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: Teams Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for PowerPoint install
+while [ ! -e "$PowerPoint" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: PowerPoint Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for Excel install
+while [ ! -e "$Excel" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: Excel Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for Outlook install
+while [ ! -e "$OUTLOOK_INSTALL" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: Outlook Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+# Wait for Word install
+while [ ! -e "$WORD_INSTALL" ];
+do
+  sleep 5
+done
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: Word Completed" >> $DEP_NOTIFY_CONFIG
+
+sleep 5
+echo "Command: DeterminateManualStep: 1" >> $DEP_NOTIFY_CONFIG
+
+echo "Command: MainText: All Applications have completed installation!" >> $DEP_NOTIFY_CONFIG
+sleep 5
+
+# Final steps
+echo "Command: MainTitle: Wrapping things up" >> $DEP_NOTIFY_CONFIG
+echo "Command: MainText: The last step is to encrypt your mac. Once this Window closes in 2 minutes, the mac will change the enrollment to the correct user and load the profile for encryption. You'll be prompted to logoff which will complete the setup process." >> $DEP_NOTIFY_CONFIG
+echo "Status: Please report any issues with this build process to TEAM" >> $DEP_NOTIFY_CONFIG
+sleep 10
+
+# Get Device details from WS1 to save into a JSON file
+curl -X GET --header 'Accept: application/json' --header 'aw-tenant-code: '"$TenantCodeString"'' --header 'Authorization: '"$AuthString"'' '{https://SITE.awmdm.com/api/mdm/devices?searchby=serialnumber&id='"$DeviceSerialNumber"'}' | python -mjson.tool > $JSONdevice
+sleep 60
+
+# Get Device ID from JSON file and assign it a vailable called Id
+Id=$(python -c 'import sys, json; print(json.load(sys.stdin)["Id"]["Value"])' < $JSONdevice)
+sleep 10
+
+# Get user Enrollment ID from earlier email variable
+curl -X GET --header 'Accept: application/json;version=2' --header 'Authorization: '"$AuthString"'' --header 'aw-tenant-code: '"$TenantCodeString"'' '{https://SITE.awmdm.com/API/mdm/devices/search?user='"$userName"'}' | python -mjson.tool > $JSONemail
+sleep 20
+
+# Get WS1 user email address from earlier variable and Device ID to change from staging user to enrollment user
+emailID=$(python -c 'import sys, json; print json.load(sys.stdin)["Devices"][0]["UserId"]["Id"]["Value"]' < $JSONemail)
+sleep 80
+
+# Remove staging user and replace with enrolled user
+curl -X PATCH --header 'Content-Type: application/json' --header 'Accept: application/json;version=2' --header 'aw-tenant-code: '"$TenantCodeString"'' --header 'Authorization: '"$AuthString"'' '{https://SITE.awmdm.com/API/mdm/devices/'"$Id"'/enrollmentuser/'"$emailID"'}'
+sleep 120
+
+# Flush DNS (It's never DNS until it's DNS)
+dscacheutil -flushcache
+
+# Create file to confirm DEPNotify completion
+/usr/bin/touch /var/tmp/com.depnotify.provisioning.done
+
+# Remove the Launch Daemon
+/bin/rm -Rf /Library/LaunchDaemons/com.aag.launchdep.plist
+
+# Wake back up
+kill "$caffeinatepid"
+
+# Renable software Updates
+softwareupdate --schedule on
+
+# Quit
+echo "Command: Quit" >>  $DEP_NOTIFY_CONFIG
+
+sleep 10
+
+# Remove DEPNotify and the logs
+/bin/rm -Rf $DEP_NOTIFY_CONFIG
+/bin/rm -Rf $DEP_NOTIFY_APP
+/bin/rm -Rf $DEP_NOTIFY_REG
+
+sleep 10
+
+exit 0
