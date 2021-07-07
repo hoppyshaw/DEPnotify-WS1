@@ -1,6 +1,6 @@
-# Updated August 2020
+# Updated July 2021
 
-I've updated my process and this is another option for folks that might want to use a staging account. I use an API call along with some other scripting methods to collect the user data during the build (based on email address) and then replace the staging account with that user. Process is faster and requires less interaction by the person building the system. The API call I make in the script is documented at your tenant's address then end with /api/help and WS1 doc is here: https://docs.vmware.com/en/VMware-Workspace-ONE-UEM/services/macOS_Platform/GUID-AWT-SINGLESTAGINGFLOWWITHAPI.html Keep in mind that you must have your DEP profile setup with the staging account as mentioned in the above doc. 
+I've updated my process and this is another option for folks that might want to use a staging account. I use an API call along with some other scripting methods to collect the user data during the build (based on email address) and then replace the staging account with that user. Process is faster and requires less interaction by the person building the system. The API call I make in the script is documented at your tenant's address then end with /api/help and WS1 doc is here: https://docs.vmware.com/en/VMware-Workspace-ONE-UEM/2102/UEM_ConsoleBasics/GUID-BF20C949-5065-4DCF-889D-1E0151016B5A.html Keep in mind that you must have your DEP profile setup with the staging account as mentioned in the above doc. 
 
 # DEPNotify 1.1.5 with Workspace One
 
